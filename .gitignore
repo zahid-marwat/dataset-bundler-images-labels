@@ -47,3 +47,6 @@ output/
 *.bundle.zip
 *.bundle.tar.gz
 annotations.json
+
+# Test files
+test_bundler.py
