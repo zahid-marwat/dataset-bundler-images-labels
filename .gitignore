@@ -1,0 +1,32 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS-specific cruft
+.DS_Store
+Thumbs.db
+
+# Pipeline outputs
+bundle_media/
+!bundle_media/.gitkeep
+annotations/
+!annotations/.gitkeep
+sample data/
+output/
+!output/.gitkeep
+
+# Large bundled artefacts
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.mp4
+
