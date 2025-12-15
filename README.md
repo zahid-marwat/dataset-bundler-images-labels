@@ -30,12 +30,13 @@ Create a pipeline that converts a large collection of annotated images and label
 ├── output/
 │     ├── media_bundle.mp4       # or .zip/.tar when using archives
 │     ├── unified_annotation.json
-│     └── frame_manifest.json    # frame order emitted by bundle_images.py
+│     └── frame_manifest.json    # optional frame order JSON when requested
 │
 ├── scripts/
 │     ├── bundle_images.py        # convert images → media bundle
 │     ├── build_annotations.py    # convert label files → unified JSON
 │     ├── run_pipeline.py         # orchestrate bundling + annotation in one call
+│     ├── unbundle_dataset.py     # reconstruct images + labels from pipeline outputs
 │     └── README_scripts.md       # how to use the scripts
 │
 ├── docs/
@@ -59,19 +60,23 @@ Create a pipeline that converts a large collection of annotated images and label
 	python3 scripts/bundle_images.py --input raw_images/
 	```
 	Override `--output` if you need a different name or location.
-	The command also emits `output/frame_manifest.json`, which records the exact
-	ordering of the bundled frames.
+	The command emits `output/frame_manifest.json`, which records the exact
+	ordering of the bundled frames. Add `--no-manifest` if you prefer to skip the
+	file entirely.
 4. Run the annotation build script (writes to `output/unified_annotation.json` by default):
 
 	```bash
 	python3 scripts/build_annotations.py --images raw_images/ --labels raw_labels/
 	```
 	Supply `--output` to redirect the final annotation file elsewhere. The tool
-	automatically consumes `output/frame_manifest.json` to keep annotation order
-	perfectly aligned with the bundled media (use `--skip-manifest` to ignore it).
+	automatically consumes `output/frame_manifest.json` (or a manifest streamed
+	via stdin with `--manifest -`) to keep annotation order perfectly aligned with
+	the bundled media. Use `--skip-manifest` to ignore it when alignment is not
+	needed.
 5. Upload the media bundle and unified annotation file from the `output/`
-	directory to your cloud storage. Keep `frame_manifest.json` alongside them if
-	downstream consumers need to validate or reconstruct frame ordering.
+	directory to your cloud storage. A separate `frame_manifest.json` is optional
+	because the unified annotation file embeds the frame ordering metadata by
+	default.
 
 ### One-Step Pipeline
 
@@ -82,9 +87,10 @@ python3 scripts/run_pipeline.py --images raw_images/ --labels raw_labels/
 ```
 
 The orchestrator forwards relevant options such as `--overwrite`, `--pattern`,
-and `--skip-missing-images` to the underlying tools. Use `--allow-missing-manifest`
-if you want the run to proceed even when the bundler does not emit a manifest.
-When no images are found in the supplied `--images` directory, the runner
+and `--skip-missing-images` to the underlying tools. Provide
+`--manifest <path>` when you also want a standalone manifest file on disk; the
+inline metadata in `unified_annotation.json` is otherwise sufficient. When no
+images are found in the supplied `--images` directory, the runner
 automatically creates grayscale placeholder frames (requires `Pillow`). Disable
 this behaviour with `--no-auto-generate-placeholders`.
 
@@ -94,6 +100,20 @@ Example using the bundled sample assets:
 python3 scripts/run_pipeline.py --overwrite
 ```
 The `--overwrite` flag refreshes any existing outputs in `output/`.
+
+### Recovering Individual Files
+
+To turn the pipeline outputs back into per-image assets and LabelMe JSON files,
+run the inverse helper:
+
+```bash
+python3 scripts/unbundle_dataset.py --bundle output/media_bundle.mp4 --annotations output/unified_annotation.json
+```
+
+By default the images are recreated under `output/recovered_images/` and the
+labels under `output/recovered_labels/`. Add `--overwrite` to refresh those
+directories or use `--output-images` / `--output-labels` to select alternative
+locations.
 
 ## Benefits
 

@@ -14,6 +14,14 @@ import shutil
 from pathlib import Path
 from typing import Any, Iterable
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from bundle_images import expand_patterns  # type: ignore
+
+DEFAULT_MANIFEST_PATH = Path("output/frame_manifest.json")
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
@@ -40,13 +48,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--images",
         default=Path("sample data"),
         type=Path,
-    help="Directory that contains the raw image files to bundle (default: sample data).",
+        help="Directory that contains the raw image files to bundle (default: sample data).",
     )
+    
     parser.add_argument(
         "--labels",
         default=Path("sample data"),
         type=Path,
-    help="Directory that contains the individual LabelMe JSON label files (default: sample data).",
+        help="Directory that contains the individual LabelMe JSON label files (default: sample data).",
     )
     parser.add_argument(
         "--bundle-output",
@@ -63,8 +72,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path("output/frame_manifest.json"),
-        help="Path for the frame-order manifest shared between both steps.",
+        help=(
+            "Optional path to persist the frame-order manifest JSON. When omitted, "
+            "the manifest is embedded into the unified annotation output only."
+        ),
     )
     parser.add_argument(
         "--pattern",
@@ -73,7 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--fps",
-        default=30.0,
+        default=60.0,
         type=float,
         help="Frames per second when encoding videos (passed to bundle_images.py, default: 30).",
     )
@@ -89,11 +100,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Forwarded to build_annotations.py to skip labels whose source images "
             "cannot be found."
         ),
-    )
-    parser.add_argument(
-        "--allow-missing-manifest",
-        action="store_true",
-        help="Do not fail if the manifest is absent after bundling.",
     )
     parser.add_argument(
         "--auto-generate-placeholders",
@@ -113,10 +119,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_command(command: list[str], description: str) -> None:
+def run_command(command: list[str], description: str, **kwargs: Any) -> None:
     logging.info("%s", description)
     logging.debug("Command: %s", " ".join(shlex.quote(part) for part in command))
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, **kwargs)
 
 
 def _collect_label_entries(labels_dir: Path) -> list[dict[str, Any]]:
@@ -186,6 +192,31 @@ def _generate_placeholder_images(entries: Iterable[dict[str, Any]], target_dir: 
     return generated
 
 
+def _build_manifest_payload(files: list[Path], bundle_path: Path, source_root: Path) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for index, image_path in enumerate(files):
+        try:
+            relative = image_path.relative_to(source_root)
+            relative_str = relative.as_posix()
+        except ValueError:
+            relative_str = image_path.name
+        entries.append(
+            {
+                "frame_index": index,
+                "relative_path": relative_str,
+                "file_name": image_path.name,
+            }
+        )
+
+    return {
+        "version": "1.0",
+        "bundle_path": str(bundle_path),
+        "source_root": str(source_root),
+        "image_count": len(entries),
+        "images": entries,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=getattr(logging, args.log_level))
@@ -202,9 +233,8 @@ def main(argv: list[str] | None = None) -> int:
         logging.error("Label directory %s does not exist or is not a folder", label_dir)
         return 1
 
-    for target in [bundle_output, annotation_output, manifest_path]:
-        if target is not None:
-            target.parent.mkdir(parents=True, exist_ok=True)
+    for target in [bundle_output, annotation_output]:
+        target.parent.mkdir(parents=True, exist_ok=True)
 
     label_entries = _collect_label_entries(label_dir)
     if not label_entries:
@@ -314,8 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         str(args.fps),
         "--log-level",
         args.log_level,
-        "--manifest",
-        str(manifest_path),
+        "--no-manifest",
     ]
     if args.overwrite:
         bundle_cmd.append("--overwrite")
@@ -326,14 +355,23 @@ def main(argv: list[str] | None = None) -> int:
         logging.error("Image bundling failed with exit code %s", exc.returncode)
         return exc.returncode
 
-    manifest_exists = manifest_path.exists()
-    if not manifest_exists:
-        message = f"Frame manifest not found at {manifest_path}"
-        if args.allow_missing_manifest:
-            logging.warning("%s; continuing without alignment", message)
-        else:
-            logging.error(message)
-            return 1
+    if manifest_path is None and DEFAULT_MANIFEST_PATH.exists():
+        try:
+            DEFAULT_MANIFEST_PATH.unlink()
+            logging.debug("Removed existing manifest at %s", DEFAULT_MANIFEST_PATH)
+        except OSError:
+            logging.warning(
+                "Could not remove existing manifest file at %s", DEFAULT_MANIFEST_PATH
+            )
+
+    frame_files = expand_patterns(image_root, bundle_pattern)
+    manifest_payload = _build_manifest_payload(frame_files, bundle_output, image_root)
+    manifest_json = json.dumps(manifest_payload)
+
+    if manifest_path is not None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(manifest_json, encoding="utf-8")
+        logging.info("Persisted frame manifest to %s", manifest_path)
 
     annotation_cmd: list[str] = [
         sys.executable,
@@ -345,17 +383,14 @@ def main(argv: list[str] | None = None) -> int:
         "--log-level",
         args.log_level,
     ]
-    if manifest_exists:
-        annotation_cmd.extend(["--manifest", str(manifest_path), "--require-manifest"])
-    else:
-        annotation_cmd.append("--skip-manifest")
+    annotation_cmd.extend(["--manifest", "-", "--require-manifest"])
 
     annotation_cmd.extend(["--images", str(image_root)])
     if args.skip_missing_images:
         annotation_cmd.append("--skip-missing-images")
 
     try:
-        run_command(annotation_cmd, "Building unified annotations")
+        run_command(annotation_cmd, "Building unified annotations", input=manifest_json, text=True)
     except subprocess.CalledProcessError as exc:
         logging.error("Annotation build failed with exit code %s", exc.returncode)
         return exc.returncode

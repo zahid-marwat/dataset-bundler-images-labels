@@ -4,8 +4,8 @@ This document captures the expected structure of the compact dataset that the
 pipeline emits. The dataset consists of two artefacts: a media bundle that
 contains the raw imagery and a unified annotation file that describes every
 object of interest. By default the CLI tools in `scripts/` write both artefacts
-into the repository's `output/` directory. A companion `frame_manifest.json`
-file links the ordering of bundled frames with the unified annotations.
+into the repository's `output/` directory. Frame-order metadata is embedded in
+the unified annotations so no standalone manifest needs to be distributed.
 
 ## Media Bundle
 
@@ -44,8 +44,10 @@ file links the ordering of bundled frames with the unified annotations.
 - Rectangle annotations are expressed as two points (top-left and bottom-right).
   The conversion logic expands them into polygons before calculating area and
   bounding boxes.
-- The manifest file aligns the bundled media with the annotations and captures
-  `frame_index`, the relative image path, and the final bundle artifact path.
+- The embedded manifest metadata aligns the bundled media with the annotations
+  and captures `frame_index`, the relative image path, and the final bundle
+  artifact path. Use `run_pipeline.py --manifest <path>` when a standalone copy
+  of the manifest JSON is also required.
 
 ## Extensibility
 
@@ -55,3 +57,6 @@ file links the ordering of bundled frames with the unified annotations.
   extending the discovery pattern or implementing modality-specific handlers.
 - Embed additional metadata (GPS coordinates, capture timestamps) by enriching
   the `images` or `annotations` entries before writing the unified JSON file.
+- Use `scripts/unbundle_dataset.py` to rebuild individual media files and
+  LabelMe annotations from the bundled outputs when round-tripping datasets is
+  required.
