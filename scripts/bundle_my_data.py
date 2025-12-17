@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -167,16 +168,27 @@ def collect_labels(labels: list[Path], source_root: Path) -> list[dict[str, str]
             raw_text = label_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             raw_text = label_path.read_text(encoding="utf-8", errors="replace")
-        entry = {
+
+        sha = hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest()
+        entry: dict[str, object] = {
             "relative_path": relative,
             "format": suffix,
-            "raw_text": raw_text,
+            "sha256": sha,
         }
+
         if suffix == "json":
             try:
-                entry["data"] = json.loads(raw_text)
+                parsed = json.loads(raw_text)
+                if isinstance(parsed, dict) and "imageData" in parsed:
+                    parsed = parsed.copy()
+                    removed = parsed.pop("imageData", None)
+                    if removed is not None:
+                        logging.debug("Stripped imageData from %s", relative)
+                entry["data"] = parsed
             except json.JSONDecodeError:
                 logging.warning("Label %s could not be parsed as JSON; storing raw text only", relative)
+        else:
+            entry["raw_text"] = raw_text
         entries.append(entry)
         logging.debug("Captured label %s", relative)
     logging.info("Captured %d label files", len(entries))
